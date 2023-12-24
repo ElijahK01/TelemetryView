@@ -93,4 +93,9 @@
   <ItemGroup>
     <Text Include="vendor\SerialPort\simple-serial-port\simple-serial-port\syntax_config.txt" />
   </ItemGroup>
+  <ItemGroup>
+    <Image Include="resources\UT_Rocketry_Logo_Circle.png">
+      <Filter>Resource Files</Filter>
+    </Image>
+  </ItemGroup>
 </Project>
