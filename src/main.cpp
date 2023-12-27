@@ -79,6 +79,7 @@ void CleanupDeviceD3D();
 void CreateRenderTarget();
 void CleanupRenderTarget();
 void WaitForLastSubmittedFrame();
+void LinkedText(bool active, char text[]);
 float vecMag(float a, float b, float c);
 
 string GetSerialData();
@@ -160,9 +161,11 @@ int main(int, char**)
     bool show_acceleration = false;
     bool show_velocity = false;
 
-    string lastData = "Data:00:00:00:00:00:00:00:00:00:00:00:00:";
+    string lastData = "Data:00:00:00:00:00:00:00:00:00:00:00:00:00:00:0:0:";
     float lastNum1 = 0;
     float lastNum2 = 0;
+
+    uint8_t state = 0;
 
     ImVec4 clear_color = ImVec4(0.4f, 0.35f, 0.7f, 1.00f);
 
@@ -249,22 +252,20 @@ int main(int, char**)
             //
 
             
-            if (count(incoming.begin(), incoming.end(), ':') == 14)
+            if (count(incoming.begin(), incoming.end(), ':') == 17)
             {
                 lastData = incoming;  
                 if (lastData.length() >= 10)
                 {
-                    int delimiterPositions[14];
+                    int delimiterPositions[16];
                     delimiterPositions[0] = lastData.find_first_of(':');
 
-                    for (int i = 1; i < 14; i++)
+                    for (int i = 1; i < 16; i++)
                     {
                         delimiterPositions[i] = lastData.find(':', delimiterPositions[i-1] + 1);
                     }
 
                     int currentTime = ImGui::GetTime();
-
-                    uint8_t state = stoi(lastData.substr(delimiterPositions[0] + 1, delimiterPositions[1] - 1)) / 1.0f;
 
                     xOrient.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[1] + 1, delimiterPositions[2] - 1)) / 1.0f);
                     yOrient.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[2] + 1, delimiterPositions[3] - 1)) / 1.0f);
@@ -283,76 +284,125 @@ int main(int, char**)
                     float uptime = stoi(lastData.substr(delimiterPositions[10] + 1, delimiterPositions[11] - 1)) / 1.0f;
                     float flightTime = stoi(lastData.substr(delimiterPositions[11] + 1, delimiterPositions[12] - 1)) / 1.0f;
                     float launchTime = stoi(lastData.substr(delimiterPositions[12] + 1, delimiterPositions[13] - 1)) / 1.0f;
+
+                    state = stoi(lastData.substr(delimiterPositions[14] + 1, delimiterPositions[15])) / 1.0f;
                 }
             }
             else
             {
                 rocketHeight.AddPoint(rocketHeight.Data.back()[0], rocketHeight.Data.back()[1]);
             }
-
+            
             ImGui::Text(lastData.c_str());
             ImGui::Text(to_string(lastNum1).c_str());
 
-            static ImPlotAxisFlags flags = ImPlotAxisFlags_NoTickLabels;
-            static float history = 20.0f;
-            rocketHeight.Span = history;
+            if (ImGui::BeginTable("split", 2))
+            {
+                ImGui::TableSetupColumn("Graph Selection", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Rocket State", ImGuiTableColumnFlags_WidthFixed, 150.0f);
 
-            if (show_overview)
-            {
-                ImPlot::BeginPlot("Overview", ImVec2(-1, 150));
-                ImPlot::SetupAxes(nullptr, nullptr, flags, flags);
-                ImPlot::SetupAxisLimits(ImAxis_X1, 0, history, ImGuiCond_Always);
-                ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1);
-                ImPlot::PlotLine("Altitude", &rocketHeight.Data[0].x, &rocketHeight.Data[0].y, rocketHeight.Data.size(), 0, 0, 2 * sizeof(float));
-                ImPlot::PlotLine("Velocity", &velMag.Data[0].x, &velMag.Data[0].y, velMag.Data.size(), 0, 0, 2 * sizeof(float));
-                ImPlot::PlotLine("Acceleration", &accelMag.Data[0].x, &accelMag.Data[0].y, accelMag.Data.size(), 0, 0, 2 * sizeof(float));
-                ImPlot::EndPlot();
-            }
-            
-            if (show_altitude)
-            {
-                ImPlot::BeginPlot("Altiude", ImVec2(-1, 150));
-                ImPlot::SetupAxes(nullptr, nullptr, flags, flags);
-                ImPlot::SetupAxisLimits(ImAxis_X1, 0, history, ImGuiCond_Always);
-                ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1);
-                ImPlot::PlotLine("Rocket Alt", &rocketHeight.Data[0].x, &rocketHeight.Data[0].y, rocketHeight.Data.size(), 0, 0, 2 * sizeof(float));
-                ImPlot::EndPlot();
-            }
+                ImGui::TableNextColumn();
 
-            if (show_velocity)
-            {
-                ImPlot::BeginPlot("Velocity", ImVec2(-1, 150));
-                ImPlot::SetupAxes(nullptr, nullptr, flags, flags);
-                ImPlot::SetupAxisLimits(ImAxis_X1, 0, history, ImGuiCond_Always);
-                ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1);
-                ImPlot::PlotLine("N-S Speed", &xVel.Data[0].x, &xVel.Data[0].y, xVel.Data.size(), 0, 0, 2 * sizeof(float));
-                ImPlot::PlotLine("E-W Speed", &yVel.Data[0].x, &yVel.Data[0].y, yVel.Data.size(), 0, 0, 2 * sizeof(float));
-                ImPlot::PlotLine("Veritcal Speed", &zVel.Data[0].x, &zVel.Data[0].y, zVel.Data.size(), 0, 0, 2 * sizeof(float));
-                ImPlot::EndPlot();
-            }
+                if (ImGui::BeginTable("split", 5))
+                {
+                    ImGui::TableNextColumn(); ImGui::Selectable("Overview", &show_overview);
+                    ImGui::TableNextColumn(); ImGui::Selectable("Altitude", &show_altitude);
+                    ImGui::TableNextColumn(); ImGui::Selectable("Velocity", &show_velocity);
+                    ImGui::TableNextColumn(); ImGui::Selectable("Orientation", &show_orientation);
+                    ImGui::TableNextColumn(); ImGui::Selectable("Acceleration", &show_acceleration);
+                    ImGui::EndTable();
+                }
 
-            if (show_orientation)
-            {
-                ImPlot::BeginPlot("Orientation", ImVec2(-1, 150));
-                ImPlot::SetupAxes(nullptr, nullptr, flags, flags);
-                ImPlot::SetupAxisLimits(ImAxis_X1, 0, history, ImGuiCond_Always);
-                ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1);
-                ImPlot::PlotLine("X Orientation", &xOrient.Data[0].x, &xOrient.Data[0].y, xOrient.Data.size(), 0, 0, 2 * sizeof(float));
-                ImPlot::PlotLine("Y Orientation", &yOrient.Data[0].x, &yOrient.Data[0].y, yOrient.Data.size(), 0, 0, 2 * sizeof(float));
-                ImPlot::PlotLine("Z Orientation", &zOrient.Data[0].x, &zOrient.Data[0].y, zOrient.Data.size(), 0, 0, 2 * sizeof(float));
-                ImPlot::EndPlot();
-            }
+                static ImPlotAxisFlags flags = ImPlotAxisFlags_NoTickLabels;
+                static float history = 20.0f;
+                rocketHeight.Span = history;
 
-            if (show_acceleration)
-            {
-                ImPlot::BeginPlot("Acceleration", ImVec2(-1, 150));
-                ImPlot::SetupAxes(nullptr, nullptr, flags, flags);
-                ImPlot::SetupAxisLimits(ImAxis_X1, 0, history, ImGuiCond_Always);
-                ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1);
-                ImPlot::PlotLine("X Acceleration", &xAccel.Data[0].x, &xAccel.Data[0].y, xAccel.Data.size(), 0, 0, 2 * sizeof(float));
-                ImPlot::PlotLine("Y Acceleration", &yAccel.Data[0].x, &yAccel.Data[0].y, yAccel.Data.size(), 0, 0, 2 * sizeof(float));
-                ImPlot::PlotLine("Z Acceleration", &zAccel.Data[0].x, &zAccel.Data[0].y, zAccel.Data.size(), 0, 0, 2 * sizeof(float));
-                ImPlot::EndPlot();
+                if (show_overview)
+                {
+                    if (ImPlot::BeginPlot("Overview", ImVec2(-1, 300))) {
+                        ImPlot::SetupAxes(nullptr, nullptr, flags, flags);
+                        ImPlot::SetupAxisLimits(ImAxis_X1, 0, history, ImGuiCond_Always);
+                        ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1);
+                        ImPlot::PlotLine("Altitude", &rocketHeight.Data[0].x, &rocketHeight.Data[0].y, rocketHeight.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::PlotLine("Velocity", &velMag.Data[0].x, &velMag.Data[0].y, velMag.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::PlotLine("Acceleration", &accelMag.Data[0].x, &accelMag.Data[0].y, accelMag.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::EndPlot();
+                    }
+                }
+
+                if (show_altitude)
+                {
+                    if (ImPlot::BeginPlot("Altiude", ImVec2(-1, 300))) {
+                        ImPlot::SetupAxes(nullptr, nullptr, flags, flags);
+                        ImPlot::SetupAxisLimits(ImAxis_X1, 0, history, ImGuiCond_Always);
+                        ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1);
+                        ImPlot::PlotLine("Rocket Alt", &rocketHeight.Data[0].x, &rocketHeight.Data[0].y, rocketHeight.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::EndPlot();
+                    }
+                }
+
+                if (show_velocity)
+                {
+                    if (ImPlot::BeginPlot("Velocity", ImVec2(-1, 300))) {
+                        ImPlot::SetupAxes(nullptr, nullptr, flags, flags);
+                        ImPlot::SetupAxisLimits(ImAxis_X1, 0, history, ImGuiCond_Always);
+                        ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1);
+                        ImPlot::PlotLine("N-S Speed", &xVel.Data[0].x, &xVel.Data[0].y, xVel.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::PlotLine("E-W Speed", &yVel.Data[0].x, &yVel.Data[0].y, yVel.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::PlotLine("Veritcal Speed", &zVel.Data[0].x, &zVel.Data[0].y, zVel.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::EndPlot();
+                    }
+                }
+
+                if (show_orientation)
+                {
+                    if (ImPlot::BeginPlot("Orientation", ImVec2(-1, 150))) {
+                        ImPlot::SetupAxes(nullptr, nullptr, flags, flags);
+                        ImPlot::SetupAxisLimits(ImAxis_X1, 0, history, ImGuiCond_Always);
+                        ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1);
+                        ImPlot::PlotLine("X Orientation", &xOrient.Data[0].x, &xOrient.Data[0].y, xOrient.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::PlotLine("Y Orientation", &yOrient.Data[0].x, &yOrient.Data[0].y, yOrient.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::PlotLine("Z Orientation", &zOrient.Data[0].x, &zOrient.Data[0].y, zOrient.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::EndPlot();
+                    }
+                }
+
+                if (show_acceleration)
+                {
+                    if (ImPlot::BeginPlot("Acceleration", ImVec2(-1, 150))) {
+                        ImPlot::SetupAxes(nullptr, nullptr, flags, flags);
+                        ImPlot::SetupAxisLimits(ImAxis_X1, 0, history, ImGuiCond_Always);
+                        ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1);
+                        ImPlot::PlotLine("X Acceleration", &xAccel.Data[0].x, &xAccel.Data[0].y, xAccel.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::PlotLine("Y Acceleration", &yAccel.Data[0].x, &yAccel.Data[0].y, yAccel.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::PlotLine("Z Acceleration", &zAccel.Data[0].x, &zAccel.Data[0].y, zAccel.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::EndPlot();
+                    }
+                }
+                ImGui::TableNextColumn();
+
+                // rocket state table
+                
+
+                char onPad[] = "On Pad";
+                char launched[] = "Launched";
+                char apogee[] = "Apogee";
+                char asc[] = "Ascending";
+                char desc[] = "Descending";
+                char drgDepl[] = "Drogue Deployed";
+                char mainDep[] = "Main Deployed";
+                char landed[] = "Landed";
+
+                LinkedText(state & 0x80, onPad);
+                LinkedText(state & 0x40, launched);
+                LinkedText(state & 0x20, apogee);
+                LinkedText(state & 0x10, asc);
+                LinkedText(state & 0x08, desc);
+                LinkedText(state & 0x04, drgDepl);
+                LinkedText(state & 0x02, mainDep);
+                LinkedText(state & 0x01, landed);
+
+                ImGui::EndTable();
             }
             
             ImGui::End();
@@ -654,6 +704,14 @@ FrameContext* WaitForNextFrameResources()
     WaitForMultipleObjects(numWaitableObjects, waitableObjects, TRUE, INFINITE);
 
     return frameCtx;
+}
+
+void LinkedText(bool active, char text[])
+{
+    if (active)
+        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), text);
+    else
+        ImGui::TextDisabled(text);
 }
 
 string GetSerialData()
