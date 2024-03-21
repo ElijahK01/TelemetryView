@@ -22,7 +22,8 @@
 #include <thread>
 #include <future>
 #include <algorithm>
-
+#include <fstream>
+#include <list>
 #ifdef _DEBUG
 #define DX12_ENABLE_DEBUG_LAYER
 #endif
@@ -31,6 +32,13 @@
 #include <dxgidebug.h>
 #pragma comment(lib, "dxguid.lib")
 #endif
+
+// Serial task masks
+#define SEND_ENABLE 1
+#define SEND_DISABLE 2
+#define READ_SERIAL 4
+
+uint8_t passedSerialParams = 0;
 
 
 struct FrameContext
@@ -82,12 +90,15 @@ void WaitForLastSubmittedFrame();
 void LinkedText(bool active, char text[]);
 float vecMag(float a, float b, float c);
 
+string serialCommTasks();
 string GetSerialData();
+void payloadReleaseEnable();
+void payloadReleaseDisable();
 
 FrameContext* WaitForNextFrameResources();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-char com_port[] = "\\\\.\\COM4";
+char com_port[] = "\\\\.\\COM5";
 DWORD COM_BAUD_RATE = CBR_9600;
 SimpleSerial Serial(com_port, COM_BAUD_RATE);
 
@@ -160,18 +171,24 @@ int main(int, char**)
     bool show_orientation = false;
     bool show_acceleration = false;
     bool show_velocity = false;
+    bool logData = false;
 
-    string lastData = "Data:00:00:00:00:00:00:00:00:00:00:00:00:00:00:0:0:";
+    string lastData = "Data:00:00:00:00:00:00:00:00:00:00:00:00:";
     float lastNum1 = 0;
     float lastNum2 = 0;
+
+    std::ofstream dataFile;
+    dataFile.open("data.csv");
+    dataFile << "x orientatuin, y orientation, z orientation, x acceleration, y acceleration, z acceleration, x velocity, y velocity, z velocity, time";
+    
 
     uint8_t state = 0;
 
     ImVec4 clear_color = ImVec4(0.4f, 0.35f, 0.7f, 1.00f);
 
     // graph data points
-    static RollingBuffer rocketHeight;
-    rocketHeight.AddPoint(0, 0);
+    static RollingBuffer altitude;
+    altitude.AddPoint(0, 0);
     static RollingBuffer xOrient;
     xOrient.AddPoint(0, 0);
     static RollingBuffer yOrient;
@@ -184,24 +201,24 @@ int main(int, char**)
     yAccel.AddPoint(0, 0);
     static RollingBuffer zAccel;
     zAccel.AddPoint(0, 0);
-    static RollingBuffer xVel;
-    xVel.AddPoint(0, 0);
-    static RollingBuffer yVel;
-    yVel.AddPoint(0, 0);
-    static RollingBuffer zVel;
-    zVel.AddPoint(0, 0);
+    static RollingBuffer AccelerationMagnitude;
+    AccelerationMagnitude.AddPoint(0, 0);
+    static RollingBuffer xMag;
+    xMag.AddPoint(0, 0);
+    static RollingBuffer yMag;
+    yMag.AddPoint(0, 0);
+    static RollingBuffer zMag;
+    zMag.AddPoint(0, 0);
 
-    static RollingBuffer orientMag;
-    orientMag.AddPoint(0, 0);
-    static RollingBuffer accelMag;
-    accelMag.AddPoint(0, 0);
-    static RollingBuffer velMag;
-    velMag.AddPoint(0, 0);
-
-
+    static RollingBuffer force;
+    force.AddPoint(0, 0);
+    static RollingBuffer temp;
+    temp.AddPoint(0, 0);
+    static RollingBuffer time;
+    time.AddPoint(0, 0);
 
     std::future<string> dataThread = std::async(GetSerialData);
-
+    uint8_t serialActions = 0;
 
     // Main loop
     bool done = false;
@@ -241,18 +258,32 @@ int main(int, char**)
             if (dataThread._Is_ready())
             {
                 incoming = dataThread.get();
-                dataThread = std::async(GetSerialData);
+                passedSerialParams = serialActions |= READ_SERIAL; // always read serial
+                dataThread = std::async(serialCommTasks);
             }
                 
             // multithreading:
             // 1. start reading serial port near program start with thread that returns the string
             // 2. check if thread has finished
             // 3. if finished, use value returned as data and start new thread listening for data
-            // 4. if not finished, continue and do not update data
-            //
+            // 4. if not finished, continue and do not update data.
+            // "Data:" + String(recieveData.data.xG) + ":"
+            /*+String(recieveData.data.yG) + ":"
+                + String(recieveData.data.zG) + ":"
+                + String(recieveData.data.xA) + ":"
+                + String(recieveData.data.yA) + ":"
+                + String(recieveData.data.zA) + ":"
+                + String(recieveData.data.xM) + ":"
+                + String(recieveData.data.yM) + ":"
+                + String(recieveData.data.zM) + ":"
+                + String(recieveData.data.f) + ":"
+                + String(recieveData.data.t) + ":"
+                + String(recieveData.data.time) + ":"
+                + String(recieveData.data.alt) + ":"
+            */
 
             
-            if (count(incoming.begin(), incoming.end(), ':') == 17)
+            if (count(incoming.begin(), incoming.end(), ':') >= 13)
             {
                 lastData = incoming;  
                 if (lastData.length() >= 10)
@@ -271,26 +302,31 @@ int main(int, char**)
                     yOrient.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[2] + 1, delimiterPositions[3] - 1)) / 1.0f);
                     zOrient.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[3] + 1, delimiterPositions[4] - 1)) / 1.0f);
                     xAccel.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[4] + 1, delimiterPositions[5] - 1)) / 1.0f);
-                    xAccel.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[5] + 1, delimiterPositions[6] - 1)) / 1.0f);
-                    xAccel.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[6] + 1, delimiterPositions[7] - 1)) / 1.0f);
-                    xVel.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[7] + 1, delimiterPositions[8] - 1)) / 1.0f);
-                    yVel.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[8] + 1, delimiterPositions[9] - 1)) / 1.0f);
-                    zVel.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[9] + 1, delimiterPositions[10] - 1)) / 1.0f);
+                    yAccel.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[5] + 1, delimiterPositions[6] - 1)) / 1.0f);
+                    zAccel.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[6] + 1, delimiterPositions[7] - 1)) / 1.0f);
+                    xMag.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[7] + 1, delimiterPositions[8] - 1)) / 1.0f);
+                    yMag.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[8] + 1, delimiterPositions[9] - 1)) / 1.0f);
+                    zMag.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[9] + 1, delimiterPositions[10] - 1)) / 1.0f);
 
-                    orientMag.AddPoint(currentTime, vecMag(xOrient.Data.back()[0], yOrient.Data.back()[0], zOrient.Data.back()[0]));
-                    accelMag.AddPoint(currentTime, vecMag(xAccel.Data.back()[0], yAccel.Data.back()[0], zAccel.Data.back()[0]));
-                    velMag.AddPoint(currentTime, vecMag(xVel.Data.back()[0], yVel.Data.back()[0], zVel.Data.back()[0]));
+                    AccelerationMagnitude.AddPoint(currentTime, vecMag(xAccel.Data.back()[0], yAccel.Data.back()[0], zAccel.Data.back()[0]));
 
-                    float uptime = stoi(lastData.substr(delimiterPositions[10] + 1, delimiterPositions[11] - 1)) / 1.0f;
-                    float flightTime = stoi(lastData.substr(delimiterPositions[11] + 1, delimiterPositions[12] - 1)) / 1.0f;
-                    float launchTime = stoi(lastData.substr(delimiterPositions[12] + 1, delimiterPositions[13] - 1)) / 1.0f;
+                    force.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[10] + 1, delimiterPositions[11] - 1)) / 1.0f);
+                    temp.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[11] + 1, delimiterPositions[12] - 1)) / 1.0f);
+                    time.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[12] + 1, delimiterPositions[13] - 1)) / 1.0f);
 
-                    state = stoi(lastData.substr(delimiterPositions[14] + 1, delimiterPositions[15])) / 1.0f;
+                    altitude.AddPoint(currentTime, stoi(lastData.substr(delimiterPositions[14] + 1, delimiterPositions[15])) / 1.0f);
+
+                    if (logData)
+                    {
+                        // save data to csv file
+                        dataFile << xOrient.Data.back().x;
+                        dataFile << yOrient.Data.back().x;
+                        dataFile << zOrient.Data.back().x;
+                        dataFile << xAccel.Data.back().x;
+                        dataFile << yAccel.Data.back().x;
+                        dataFile << zAccel.Data.back().x;
+                    }
                 }
-            }
-            else
-            {
-                rocketHeight.AddPoint(rocketHeight.Data.back()[0], rocketHeight.Data.back()[1]);
             }
             
             ImGui::Text(lastData.c_str());
@@ -315,7 +351,7 @@ int main(int, char**)
 
                 static ImPlotAxisFlags flags = ImPlotAxisFlags_NoTickLabels;
                 static float history = 20.0f;
-                rocketHeight.Span = history;
+                altitude.Span = history;
 
                 if (show_overview)
                 {
@@ -323,9 +359,9 @@ int main(int, char**)
                         ImPlot::SetupAxes(nullptr, nullptr, flags, flags);
                         ImPlot::SetupAxisLimits(ImAxis_X1, 0, history, ImGuiCond_Always);
                         ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1);
-                        ImPlot::PlotLine("Altitude", &rocketHeight.Data[0].x, &rocketHeight.Data[0].y, rocketHeight.Data.size(), 0, 0, 2 * sizeof(float));
-                        ImPlot::PlotLine("Velocity", &velMag.Data[0].x, &velMag.Data[0].y, velMag.Data.size(), 0, 0, 2 * sizeof(float));
-                        ImPlot::PlotLine("Acceleration", &accelMag.Data[0].x, &accelMag.Data[0].y, accelMag.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::PlotLine("Altitude", &altitude.Data[0].x, &altitude.Data[0].y, altitude.Data.size(), 0, 0, 2 * sizeof(float));
+                        //ImPlot::PlotLine("Velocity", &velMag.Data[0].x, &velMag.Data[0].y, velMag.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::PlotLine("Acceleration", &AccelerationMagnitude.Data[0].x, &AccelerationMagnitude.Data[0].y, AccelerationMagnitude.Data.size(), 0, 0, 2 * sizeof(float));
                         ImPlot::EndPlot();
                     }
                 }
@@ -336,7 +372,7 @@ int main(int, char**)
                         ImPlot::SetupAxes(nullptr, nullptr, flags, flags);
                         ImPlot::SetupAxisLimits(ImAxis_X1, 0, history, ImGuiCond_Always);
                         ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1);
-                        ImPlot::PlotLine("Rocket Alt", &rocketHeight.Data[0].x, &rocketHeight.Data[0].y, rocketHeight.Data.size(), 0, 0, 2 * sizeof(float));
+                        ImPlot::PlotLine("Rocket Alt", &altitude.Data[0].x, &altitude.Data[0].y, altitude.Data.size(), 0, 0, 2 * sizeof(float));
                         ImPlot::EndPlot();
                     }
                 }
@@ -347,9 +383,9 @@ int main(int, char**)
                         ImPlot::SetupAxes(nullptr, nullptr, flags, flags);
                         ImPlot::SetupAxisLimits(ImAxis_X1, 0, history, ImGuiCond_Always);
                         ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1);
-                        ImPlot::PlotLine("N-S Speed", &xVel.Data[0].x, &xVel.Data[0].y, xVel.Data.size(), 0, 0, 2 * sizeof(float));
-                        ImPlot::PlotLine("E-W Speed", &yVel.Data[0].x, &yVel.Data[0].y, yVel.Data.size(), 0, 0, 2 * sizeof(float));
-                        ImPlot::PlotLine("Veritcal Speed", &zVel.Data[0].x, &zVel.Data[0].y, zVel.Data.size(), 0, 0, 2 * sizeof(float));
+                        //ImPlot::PlotLine("N-S Speed", &xVel.Data[0].x, &xVel.Data[0].y, xVel.Data.size(), 0, 0, 2 * sizeof(float));
+                        //ImPlot::PlotLine("E-W Speed", &yVel.Data[0].x, &yVel.Data[0].y, yVel.Data.size(), 0, 0, 2 * sizeof(float));
+                        //ImPlot::PlotLine("Veritcal Speed", &zVel.Data[0].x, &zVel.Data[0].y, zVel.Data.size(), 0, 0, 2 * sizeof(float));
                         ImPlot::EndPlot();
                     }
                 }
@@ -401,6 +437,15 @@ int main(int, char**)
                 LinkedText(state & 0x04, drgDepl);
                 LinkedText(state & 0x02, mainDep);
                 LinkedText(state & 0x01, landed);
+
+                // Rocket enable button
+                if (ImGui::Button("Release Payload"))
+                    serialActions |= SEND_ENABLE;
+
+                if (ImGui::Button("Cancel Release"))
+                   serialActions |= SEND_DISABLE;
+
+                ImGui::Checkbox("Enable Logging", &logData);
 
                 ImGui::EndTable();
             }
@@ -501,7 +546,7 @@ int main(int, char**)
     CleanupDeviceD3D();
     ::DestroyWindow(hwnd);
     ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
-
+    dataFile.close();
     return 0;
 }
 
@@ -714,12 +759,37 @@ void LinkedText(bool active, char text[])
         ImGui::TextDisabled(text);
 }
 
+string serialCommTasks()
+{
+    string output = "";
+    if (passedSerialParams & SEND_ENABLE)
+        payloadReleaseEnable();
+    if (passedSerialParams & SEND_DISABLE)
+        payloadReleaseDisable();
+    if (passedSerialParams & READ_SERIAL)
+        output = GetSerialData();
+
+    return output;
+}
+
 string GetSerialData()
 {
     int reply_wait_time = 1;
     string syntax_type = "json";
 
     return Serial.ReadSerialPort(reply_wait_time, syntax_type);
+}
+
+void payloadReleaseEnable()
+{
+    char data = 'r';
+    Serial.WriteSerialPort(&data);
+}
+
+void payloadReleaseDisable()
+{
+    char data = 'u';
+    Serial.WriteSerialPort(&data);
 }
 
 float vecMag(float a, float b, float c)
